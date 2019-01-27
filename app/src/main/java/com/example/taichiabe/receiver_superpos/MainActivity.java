@@ -1,21 +1,16 @@
 package com.example.taichiabe.receiver_superpos;
-
 /*=========================================================*
  * システム：受信・リアルタイムFFT
+ * Receiver Superposition
  *==========================================================*/
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-
 import android.app.Activity;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Bundle;
 import android.os.Vibrator;
-import android.util.Log;
 import android.widget.CompoundButton;
 import android.widget.CompoundButton.OnCheckedChangeListener;
 import android.widget.Switch;
@@ -48,8 +43,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     int spcounter;
     double[][] spdbfs;
     double[] avgdbfs = new double[fftSize / 2];
-    //List<double[]> spdbfs = new ArrayList<>();
-    //double[] spdbfs = new double[fftSize / 2];
     String filename;
 
     @Override
@@ -83,9 +76,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
             filename = String.valueOf(System.currentTimeMillis());
             //SPNUMコのデシベル値配列
             spdbfs = new double[fftSize / 2][SPNUM];
-
-            //TODO: Receiverと同じ
-            //FFTPOINT = 4096;
 
             //受信周波数からFFTポイントを算出
             FFTPOINT = (int)(2 * RECVFREQ / resol);
@@ -160,7 +150,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                         //FFTクラスの作成と値の引き渡し
                         FFT4g fft = new FFT4g(fftSize);
                         double[] FFTdata = new double[fftSize];
-                        for (int i = (int) (2 * 16000 / resol); i < fftSize; i++) {
+                        for(int i = 0; i < fftSize; i++) {
                             FFTdata[i] = (double) s[i];
                         }
                         fft.rdft(1, FFTdata);
@@ -168,17 +158,9 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                         // デシベルの計算
                         double[] ps = new double[fftSize / 2];
                         double[] dbfs = new double[fftSize / 2];
-                        for (int i = (int) (2 * 16000 / resol); i < fftSize; i += 2) {
+                        for(int i = 0; i < fftSize; i += 2) {
                             ps[i / 2] = Math.sqrt(Math.pow(FFTdata[i], 2) + Math.pow(FFTdata[i + 1], 2));
                             dbfs[i / 2] = (int) (20 * Math.log10(ps[i / 2] / dB_baseline));
-
-                            /*
-                            // D E B U G
-                            if (i == FFTPOINT) {
-                                sdlog.put("freq" + filename, String.format("%.3f", FFTPOINT * resol / 2) + " : " + String.valueOf(dbfs[i / 2]));
-                            }
-                        */
-
                         }
                         int i,j;
 
