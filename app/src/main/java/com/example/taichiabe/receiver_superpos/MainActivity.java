@@ -5,6 +5,8 @@ package com.example.taichiabe.receiver_superpos;
  *==========================================================*/
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Locale;
+
 import android.app.Activity;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
@@ -19,41 +21,38 @@ import android.widget.TextView;
 
 public class MainActivity extends Activity implements OnCheckedChangeListener {
 
-    int RECVFREQ;
-    double DB_DIFFERENCE;
-    int SPNUM;
-    int FFTPOINT;
-
     //サンプリングレート
-    int RecvSR = 44100;
+    public static final int SAMPLING_RATE = 44100;
     //FFTのポイント数（2の累乗）
-    int fftSize = 4096;
+    public static final int FFT_SIZE = 4096;
     //デシベルベースラインの設定
-    double dB_baseline = Math.pow(2, 15) * fftSize * Math.sqrt(2);
+    public static final double DB_BASELINE = Math.pow(2, 15) * FFT_SIZE * Math.sqrt(2);
     //分解能の計算
-    double resol = RecvSR / (double) fftSize;
-    Vibrator vib;
-    AudioRecord audioRec = null;
-    boolean bIsRecording = false;
-    int RecvBufSize;
+    public static final double RESOLUTION = SAMPLING_RATE / (double) FFT_SIZE;
+    private Vibrator vib;
+    private AudioRecord audioRec = null;
+    boolean isRecording = false;
     Thread fft;
-    TimeMeasure tm;
+    private TimeMeasure tm;
     SdLog sdlog;
-    //重ね合わせ回数
+    //加算平均アベレージング回数
     int spcounter;
     double[][] spdbfs;
-    double[] avgdbfs = new double[fftSize / 2];
-    String filename;
+    double[] avgdbfs = new double[FFT_SIZE / 2];
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        TextView RecvfreqText = findViewById(R.id.RecvfreqText);
-        RecvfreqText.setText(R.string.RecvfreqText);
-        Switch switch1 = findViewById(R.id.Switch);
-        switch1.setOnCheckedChangeListener(this);
+        TextView receivingFreqText = findViewById(R.id.receivingFreqText);
+        receivingFreqText.setText(R.string.receivingFreqText);
+        TextView decibelDiffText = findViewById(R.id.decibelDiffText);
+        decibelDiffText.setText(R.string.decibelDiffText);
+        TextView SpText = findViewById(R.id.SpText);
+        SpText.setText(R.string.SpText);
+        Switch receivingSwitch = findViewById(R.id.receivingSwitch);
+        receivingSwitch.setOnCheckedChangeListener(this);
     }
 
     @Override
@@ -66,21 +65,17 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
         if (isChecked) {
 
-            EditText RecvfreqEdit = findViewById(R.id.RecvfreqEdit);
-            EditText DbDifferenceEdit = findViewById(R.id.DbDifferenceEdit);
+            EditText receivingFreqEdit = findViewById(R.id.receivingFreqEdit);
+            EditText decibelDiffEdit = findViewById(R.id.decibelDiffEdit);
             EditText SpEdit = findViewById(R.id.SpEdit);
-            RECVFREQ = Integer.parseInt(RecvfreqEdit.getText().toString());
-            DB_DIFFERENCE = Integer.parseInt(DbDifferenceEdit.getText().toString());
-            SPNUM = Integer.parseInt(SpEdit.getText().toString());
 
-            filename = String.valueOf(System.currentTimeMillis());
+            final int RECEIVING_FREQ = Integer.parseInt(receivingFreqEdit.getText().toString());
+            final double DECIBEL_DIFF = Integer.parseInt(decibelDiffEdit.getText().toString());
+            final int SP_NUM = Integer.parseInt(SpEdit.getText().toString());
+
+            final String FILENAME = String.valueOf(System.currentTimeMillis());
             //SPNUMコのデシベル値配列
-            spdbfs = new double[fftSize / 2][SPNUM];
-
-            //受信周波数からFFTポイントを算出
-            FFTPOINT = (int)(2 * RECVFREQ / resol);
-            if(FFTPOINT % 2 == 1)
-                FFTPOINT = FFTPOINT + 1;
+            spdbfs = new double[FFT_SIZE / 2][SP_NUM];
 
             spcounter = 0;
 
@@ -97,18 +92,20 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
             */
 
             //実験用デバイスではRecvBufSize = 3584
-            RecvBufSize = AudioRecord.getMinBufferSize(
-                    RecvSR,
+            final int MIN_BUFFER__SIZE = AudioRecord.getMinBufferSize(
+                    SAMPLING_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT);
+
+            final int RECORD_BUFFER_SIZE = MIN_BUFFER__SIZE * 4;
 
             //最終的にFFTクラスの4096以上を確保するためbufferSizeInBytes = RecvBufSize * 4
             audioRec = new AudioRecord(
                     MediaRecorder.AudioSource.MIC,
-                    RecvSR,
+                    SAMPLING_RATE,
                     AudioFormat.CHANNEL_IN_MONO,
                     AudioFormat.ENCODING_PCM_16BIT,
-                    RecvBufSize * 4);
+                    RECORD_BUFFER_SIZE);
 
             //Vibratorクラスのインスタンス取得
             vib = (Vibrator) getSystemService(VIBRATOR_SERVICE);
@@ -117,131 +114,29 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
             tm = new TimeMeasure();
 
             audioRec.startRecording();
-            bIsRecording = true;
+            isRecording = true;
 
             //フーリエ解析スレッドを生成
             fft = new Thread(new Runnable() {
                 @Override
                 public void run() {
 
-                    byte buf[] = new byte[RecvBufSize * 4];
-                    while (bIsRecording) {
+                    byte[] recordData = new byte[RECORD_BUFFER_SIZE];
+                    while (isRecording) {
 
                         //計測開始
-                        tm.start();
+                        tm.startMeasure();
 
-                        audioRec.read(buf, 0, buf.length);
+                        audioRec.read(recordData, 0, recordData.length);
 
                         //エンディアン変換
-                        //配列bufをもとにByteBufferオブジェクトbfを作成
-                        ByteBuffer bf = ByteBuffer.wrap(buf);
-                        //バッファをクリア（データは削除されない）
-                        bf.clear();
-                        //リトルエンディアンに変更
-                        bf.order(ByteOrder.LITTLE_ENDIAN);
-                        short[] s = new short[RecvBufSize * 2];
-                        //位置から容量まで
-                        for (int i = bf.position(); i < bf.capacity() / 2; i++) {
-                            //short値を読むための相対getメソッド
-                            //現在位置の2バイトを読み出す
-                            s[i] = bf.getShort();
-                        }
-
-                        //FFTクラスの作成と値の引き渡し
-                        FFT4g fft = new FFT4g(fftSize);
-                        double[] FFTdata = new double[fftSize];
-                        for(int i = 0; i < fftSize; i++) {
-                            FFTdata[i] = (double) s[i];
-                        }
-                        fft.rdft(1, FFTdata);
-
-                        // デシベルの計算
-                        double[] ps = new double[fftSize / 2];
-                        double[] dbfs = new double[fftSize / 2];
-                        for(int i = 0; i < fftSize; i += 2) {
-                            ps[i / 2] = Math.sqrt(Math.pow(FFTdata[i], 2) + Math.pow(FFTdata[i + 1], 2));
-                            dbfs[i / 2] = (int) (20 * Math.log10(ps[i / 2] / dB_baseline));
-                        }
-                        int i,j;
-
-                        //重ね合わせ Superposition
-                        int sp_start = (int)(2 * 16000 / resol);
-                        if(sp_start % 2 == 1)
-                            sp_start = sp_start + 1;
-
-                        int sp_end = fftSize;
-
-                        if(spcounter < SPNUM - 1) {     //最初の(SPNUM-1)回は代入
-
-                            //spcounter回目の配列に現在のデシベル値を代入
-                            for(i = sp_start / 2; i < sp_end / 2; i++) {
-                                spdbfs[i][spcounter] = dbfs[i];
-                            }
-                            spcounter++;
-
-                        } else {    //SPNUM回目から検知
-
-                            //配列を1つずつずらす
-                            for(i = 1; i < SPNUM; i++) {
-                                for (j = sp_start / 2; j < sp_end / 2; j++) {
-                                    spdbfs[j][i-1] = spdbfs[j][i];
-                                }
-                            }
-
-                            //SPNUMコの配列からトータルを計算
-                            for(i = sp_start / 2; i < sp_end; i++) {
-                                for(j = 0; j < SPNUM; j++) {
-                                    avgdbfs[i] += spdbfs[i][j];
-                                }
-                            }
-                            //SPNUMで割って平均を算出
-                            for(i = sp_start / 2; i < sp_end; i++) {
-                                avgdbfs[i] /= SPNUM;
-                            }
-
-                            //比較対象の周波数帯のデシベル値を算出 comparison target
-                            int ctdbfs = 0, ctcounter = 0;
-                            int ct_start = (int)(2 * (RECVFREQ-1000) / resol);
-                            if(ct_start % 2 == 1)
-                                ct_start = ct_start + 1;
-
-                            int ct_end = (int)(2 * (RECVFREQ-500) / resol);
-                            if(ct_end % 2 == 1)
-                                ct_end = ct_end + 1;
-
-                            for(i = ct_start / 2; i < ct_end / 2; i++) {
-                                ctdbfs += avgdbfs[i];
-                                ctcounter++;
-                            }
-                            ctdbfs /= ctcounter;
-
-                            //ドップラー効果考慮 doppler effect
-                            int de_start = (int)(2 * RECVFREQ / resol);
-                            if(de_start % 2 == 1)
-                                de_start = de_start + 1;
-
-                            int de_end = (int)(2 * (RECVFREQ+500) / resol);
-                            if(de_end % 2 == 1)
-                                de_end = de_end + 1;
-
-                            for(i = de_start / 2; i < de_end / 2; i++) {
-                                if(avgdbfs[i] >= ctdbfs + DB_DIFFERENCE) {
-                                    //sdlog.put("powerspectrum3-" + filename, String.format("%.3f", i * resol) + " : " + String.valueOf(ps[i]));
-                                    //検出周波数
-                                    sdlog.put("freq3-" + filename, String.format("%.3f", i * resol) + " : " + String.valueOf(avgdbfs[i]));
-                                    vib.cancel();
-                                    vib.vibrate(200);
-                                    break;
-                                }
-                            }
-
-                            //計測終了
-                            tm.finish();
-                            sdlog.put("time3-" + filename, "processing time : " + tm.getResult().substring(0, 5));
-                            //処理時間出力
-                            tm.printResult();
-
-                        }
+                        short[] shortData = toLittleEndian(recordData, RECORD_BUFFER_SIZE);
+                        //FFTクラスの作成と値の引き出し
+                        double[] fftData = fastFourierTransform(shortData);
+                        //パワースペクトル・デシベルの計算
+                        double[] decibelFrequencySpectrum = computePowerSpectrum(fftData);
+                        //重ね合わせ
+                        superposition(SP_NUM, decibelFrequencySpectrum, RECEIVING_FREQ, DECIBEL_DIFF, FILENAME);
 
                     }
                     audioRec.stop();
@@ -258,7 +153,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                 vib.cancel();
                 audioRec.stop();
                 //audioRec.release();
-                bIsRecording = false;
+                isRecording = false;
             }
         }
     }
@@ -269,7 +164,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
         if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
             audioRec.stop();
-            bIsRecording = false;
+            isRecording = false;
         }
 
     }
@@ -281,7 +176,187 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
             audioRec.stop();
             audioRec.release();
-            bIsRecording = false;
+            isRecording = false;
         }
+    }
+
+    /**
+     * エンディアン変換
+     * @param   buf     受信バッファデータ
+     * @param   bufferSize  受信バッファサイズ
+     * @return  shortData   エンディアン変換後short型データ
+     */
+    public short[] toLittleEndian(byte[] buf, int bufferSize) {
+
+        //エンディアン変換
+        //配列bufをもとにByteBufferオブジェクトbfを作成
+        ByteBuffer bf = ByteBuffer.wrap(buf);
+        //バッファをクリア（データは削除されない）
+        bf.clear();
+        //リトルエンディアンに変更
+        bf.order(ByteOrder.LITTLE_ENDIAN);
+        short[] shortData = new short[bufferSize / 2];
+        //位置から容量まで
+        for (int i = bf.position(); i < bf.capacity() / 2; i++) {
+            //short値を読むための相対getメソッド
+            //現在位置の2バイトを読み出す
+            shortData[i] = bf.getShort();
+        }
+        return shortData;
+    }
+
+    /**
+     * 高速フーリエ変換
+     * @param   shortData   エンディアン変換後データ
+     * @return  fftData     フーリエ変換後データ
+     */
+    public double[] fastFourierTransform(short[] shortData) {
+
+        //FFTクラスの作成と値の引き渡し
+        FFT4g fft = new FFT4g(FFT_SIZE);
+        double[] fftData = new double[FFT_SIZE];
+        for(int i = 0; i < FFT_SIZE; i++) {
+            fftData[i] = (double) shortData[i];
+        }
+        fft.rdft(1, fftData);
+
+        return fftData;
+    }
+
+    /**
+     * パワースペクトル・デシベルの計算
+     * @param   fftData         フーリエ変換後のデータ
+     * @return  decibelFrequencySpectrum    デシベル値
+     */
+    public double[] computePowerSpectrum(double[] fftData) {
+
+        //パワースペクトル・デシベルの計算
+        double[] powerSpectrum = new double[FFT_SIZE / 2];
+        //DeciBel Frequency Spectrum
+        double[] decibelFrequencySpectrum = new double[FFT_SIZE / 2];
+        for(int i = 0; i < FFT_SIZE; i += 2) {
+            //dbfs[i / 2] = (int) (20 * Math.log10(Math.sqrt(Math.pow(FFTdata[i], 2) + Math.pow(FFTdata[i + 1], 2)) / dB_baseline));
+            powerSpectrum[i / 2] = Math.sqrt(Math.pow(fftData[i], 2) + Math.pow(fftData[i + 1], 2));
+            decibelFrequencySpectrum[i / 2] = (int) (20 * Math.log10(powerSpectrum[i / 2] / DB_BASELINE));
+        }
+        return decibelFrequencySpectrum;
+    }
+
+    /**
+     * 加算平均アベレージング
+     * @param spnum 加算平均アベレージング回数
+     * @param dbfs  デシベル値
+     * @param freq  受信周波数
+     * @param decibel   設定したデシベル値差
+     * @param filename  ファイル名
+     */
+    public void superposition(int spnum, double[] dbfs, int freq, double decibel, String filename) {
+
+        //重ね合わせ Superposition
+        int spFirstFrame = frameSetting(16000);
+        int spLastFrame = FFT_SIZE;
+
+        if(spcounter < spnum - 1) {     //最初の(SPNUM-1)回は代入
+
+            //spcounter回目の配列に現在のデシベル値を代入
+            for(int i = spFirstFrame / 2; i < spLastFrame / 2; i++) {
+                spdbfs[i][spcounter] = dbfs[i];
+            }
+            spcounter++;
+
+        } else {    //SPNUM回目以降はずっとこっち
+
+            //配列を1つずつずらす
+            for (int j = 1; j < spnum; j++) {
+                for (int k = spFirstFrame / 2; k < spLastFrame / 2; k++) {
+                    spdbfs[k][j - 1] = spdbfs[k][j];
+                }
+            }
+
+            //SPNUMコの配列からトータルを計算
+            for (int l = spFirstFrame / 2; l < spLastFrame; l++) {
+                for (int m = 0; m < spnum; m++) {
+                    avgdbfs[l] += spdbfs[l][m];
+                }
+            }
+            //SPNUMで割って平均を算出
+            for (int n = spFirstFrame / 2; n < spLastFrame; n++) {
+                avgdbfs[n] /= spnum;
+            }
+
+            int total = computeComparisonTargetDecibelAve(freq, avgdbfs);
+            detectApproaching(freq, total + decibel, avgdbfs, filename);
+
+            //計測終了
+            tm.finishMeasure();
+            sdlog.put("time3-" + filename, "processing time : " + tm.measureTimeSec().substring(0, 5));
+            //処理時間出力
+            tm.printTimeSec();
+        }
+    }
+
+    /**
+     * 比較対象の周波数帯の平均デシベル値を取得
+     * @param freq  受信周波数
+     * @param decibelFrequencySpectrum  デシベル値周波数成分
+     * @return  targetDecibelAve    比較対象の周波数帯の平均デシベル値
+     */
+    public int computeComparisonTargetDecibelAve(int freq, double[] decibelFrequencySpectrum) {
+
+        //比較対象の周波数を設定 comparison target
+        int targetDecibelAve = 0, freqFrameIter = 0;
+        int ctFirstFrame = frameSetting(freq - 2000);
+        int ctLastFrame = frameSetting(freq - 1500);
+
+        for (int j = ctFirstFrame / 2; j < ctLastFrame / 2; j++) {
+            targetDecibelAve += decibelFrequencySpectrum[j];
+            freqFrameIter++;
+        }
+        try {
+            targetDecibelAve /= freqFrameIter;
+        } catch (ArithmeticException e) {
+            e.printStackTrace();
+        }
+        return targetDecibelAve;
+    }
+
+    /**
+     * 接近検知アルゴリズム
+     * @param freq          受信周波数
+     * @param decibel       検知デシベル値
+     * @param decibelFrequencySpectrum  デシベル値周波数成分
+     * @param filename      ファイル名
+     */
+    public void detectApproaching(int freq, double decibel, double[] decibelFrequencySpectrum, String filename) {
+
+        //ドップラー効果考慮 Doppler Effect
+        //500Hzの幅で接近検知
+        int deFirstFrame = frameSetting(freq);
+        int deLastFrame = frameSetting(freq + 500);
+
+        for(int j = deFirstFrame / 2; j < deLastFrame / 2; j++) {
+            if(decibelFrequencySpectrum[j] > decibel) {
+                //検知周波数
+                sdlog.put("freq3-" + filename, String.format(Locale.US, "%.3f", j * RESOLUTION) + " : " + String.valueOf(decibelFrequencySpectrum[j]));
+                //インスタンス取得が外だから振動しない可能性あり
+                vib.cancel();
+                vib.vibrate(200);
+                break;
+            }
+        }
+    }
+
+    /**
+     * 周波数からフレーム設定
+     * @param   freq    周波数
+     * @return  frame   フレーム
+     */
+    public int frameSetting(int freq) {
+
+        int frame = (int)(2 * freq / RESOLUTION);
+        if(frame % 2 == 1) {
+            frame++;
+        }
+        return frame;
     }
 }
