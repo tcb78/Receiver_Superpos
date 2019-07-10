@@ -36,9 +36,8 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     private TimeMeasure tm;
     SdLog sdlog;
     //加算平均アベレージング回数
-    int spcounter;
-    double[][] spdbfs;
-    double[] avgdbfs = new double[FFT_SIZE / 2];
+    int spCounter;
+    double[][] spSpectrum;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -71,25 +70,12 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
             final int RECEIVING_FREQ = Integer.parseInt(receivingFreqEdit.getText().toString());
             final double DECIBEL_DIFF = Integer.parseInt(decibelDiffEdit.getText().toString());
-            final int SP_NUM = Integer.parseInt(SpEdit.getText().toString());
+            final int SP_NUMBER = Integer.parseInt(SpEdit.getText().toString());
 
             final String FILENAME = String.valueOf(System.currentTimeMillis());
-            //SPNUMコのデシベル値配列
-            spdbfs = new double[FFT_SIZE / 2][SP_NUM];
 
-            spcounter = 0;
-
-            /*
-            if(RECVFREQ == 18000)      FFTPOINT = 3344;
-            else if(RECVFREQ == 18500) FFTPOINT = 3436;
-            else if(RECVFREQ == 19000) FFTPOINT = 3530;
-            else if(RECVFREQ == 19500) FFTPOINT = 3622;
-            else if(RECVFREQ == 20000) FFTPOINT = 3716;
-            else if(RECVFREQ == 20500) FFTPOINT = 3808;
-            else if(RECVFREQ == 21000) FFTPOINT = 3900;
-            else if(RECVFREQ == 21500) FFTPOINT = 3994;
-            else if(RECVFREQ == 22000) FFTPOINT = 4086;
-            */
+            spCounter = 0;
+            spSpectrum = new double[SP_NUMBER][FFT_SIZE / 2];
 
             //実験用デバイスではRecvBufSize = 3584
             final int MIN_BUFFER__SIZE = AudioRecord.getMinBufferSize(
@@ -108,7 +94,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                     RECORD_BUFFER_SIZE);
 
             //Vibratorクラスのインスタンス取得
-            vib = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            vib = (Vibrator)getSystemService(VIBRATOR_SERVICE);
 
             //TimeMeasureクラスのインスタンス取得
             tm = new TimeMeasure();
@@ -134,10 +120,21 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                         //FFTクラスの作成と値の引き出し
                         double[] fftData = fastFourierTransform(shortData);
                         //パワースペクトル・デシベルの計算
-                        double[] decibelFrequencySpectrum = computePowerSpectrum(fftData);
+                        double[] spectrum = computePowerSpectrum(fftData);
                         //重ね合わせ
-                        superposition(SP_NUM, decibelFrequencySpectrum, RECEIVING_FREQ, DECIBEL_DIFF, FILENAME);
+                        superposition(SP_NUMBER, spectrum);
+                        //アベレージング
+                        double[] average = averaging(SP_NUMBER, spSpectrum);
+                        //比較対象周波数帯の平均デシベル値を算出
+                        double targetDecibel = computeTargetDecibel(RECEIVING_FREQ, average);
+                        //接近検知
+                        detectApproaching(RECEIVING_FREQ, average, targetDecibel, DECIBEL_DIFF, FILENAME);
 
+                        //計測終了
+                        tm.finishMeasure();
+                        sdlog.put("time3-" + FILENAME, "processing time : " + tm.measureTimeSec().substring(0, 5));
+                        //処理時間出力
+                        tm.printTimeSec();
                     }
                     audioRec.stop();
                     audioRec.release();
@@ -166,7 +163,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
             audioRec.stop();
             isRecording = false;
         }
-
     }
 
     @Override
@@ -182,9 +178,9 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
     /**
      * エンディアン変換
-     * @param   buf     受信バッファデータ
-     * @param   bufferSize  受信バッファサイズ
-     * @return  shortData   エンディアン変換後short型データ
+     * @param buf 受信バッファデータ
+     * @param bufferSize 受信バッファサイズ
+     * @return エンディアン変換後short型データ
      */
     public short[] toLittleEndian(byte[] buf, int bufferSize) {
 
@@ -196,8 +192,11 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         //リトルエンディアンに変更
         bf.order(ByteOrder.LITTLE_ENDIAN);
         short[] shortData = new short[bufferSize / 2];
+
+        int bfBegin = bf.position();
+        int bfEnd = bf.capacity() / 2;
         //位置から容量まで
-        for (int i = bf.position(); i < bf.capacity() / 2; i++) {
+        for (int i = bfBegin; i < bfEnd; i++) {
             //short値を読むための相対getメソッド
             //現在位置の2バイトを読み出す
             shortData[i] = bf.getShort();
@@ -207,8 +206,8 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
     /**
      * 高速フーリエ変換
-     * @param   shortData   エンディアン変換後データ
-     * @return  fftData     フーリエ変換後データ
+     * @param shortData エンディアン変換後データ
+     * @return フーリエ変換後データ
      */
     public double[] fastFourierTransform(short[] shortData) {
 
@@ -225,119 +224,141 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
     /**
      * パワースペクトル・デシベルの計算
-     * @param   fftData         フーリエ変換後のデータ
-     * @return  decibelFrequencySpectrum    デシベル値
+     * @param fftData フーリエ変換後のデータ
+     * @return デシベル値
      */
     public double[] computePowerSpectrum(double[] fftData) {
 
-        //パワースペクトル・デシベルの計算
-        double[] powerSpectrum = new double[FFT_SIZE / 2];
+        //絶対値データ absolute value
+        double[] absoluteData = new double[FFT_SIZE / 2];
         //DeciBel Frequency Spectrum
-        double[] decibelFrequencySpectrum = new double[FFT_SIZE / 2];
+        double[] spectrum = new double[FFT_SIZE / 2];
         for(int i = 0; i < FFT_SIZE; i += 2) {
-            //dbfs[i / 2] = (int) (20 * Math.log10(Math.sqrt(Math.pow(FFTdata[i], 2) + Math.pow(FFTdata[i + 1], 2)) / dB_baseline));
-            powerSpectrum[i / 2] = Math.sqrt(Math.pow(fftData[i], 2) + Math.pow(fftData[i + 1], 2));
-            decibelFrequencySpectrum[i / 2] = (int) (20 * Math.log10(powerSpectrum[i / 2] / DB_BASELINE));
+            absoluteData[i / 2] = Math.sqrt(Math.pow(fftData[i], 2) + Math.pow(fftData[i + 1], 2));
+            spectrum[i / 2] = (int) (20 * Math.log10(absoluteData[i / 2] / DB_BASELINE));
         }
-        return decibelFrequencySpectrum;
+        return spectrum;
+    }
+
+    /**
+     * 重ね合わせ
+     * @param spNum 重ね合わせ回数
+     * @param spectrum デシベル値 decibelFrequencySpectrum
+     */
+    public void superposition(int spNum, double[] spectrum) {
+
+        int spFrameBegin = frameSetting(16000) / 2;
+        int spFrameEnd = FFT_SIZE / 2;
+
+        if(spCounter < spNum - 1) { /* 最初の (SPNUM-1) 回は代入 */
+            for(int i = spFrameBegin; i < spFrameEnd; i++) {
+                spSpectrum[spCounter][i] = spectrum[i];
+            }
+            spCounter++;
+        } else {    /* (SPNUM) 回目以降 */
+            //配列を一つずつずらす
+            for(int i = 0; i < spNum; i++) {
+                for(int j = spFrameBegin; j < spFrameEnd; j++) {
+                    spSpectrum[i][j] = spSpectrum[i + 1][j];
+                }
+            }
+            //最新のデータを追加
+            for(int i = spFrameBegin; i < spFrameEnd; i++) {
+                spSpectrum[spNum - 1][i] = spectrum[i];
+            }
+        }
+    }
+
+    /**
+     * spCounterとか(SPNUM-1)回とか排除した重ね合わせ
+     * @param spNum 重ね合わせ回数
+     * @param spectrum デシベル値
+     */
+    public void superpositionalpha(int spNum, double[] spectrum) {
+        int spFrameBegin = frameSetting(16000) / 2;
+        int spFrameEnd = FFT_SIZE / 2;
+
+        //配列を一つずつずらす
+        for(int i = 0; i < spNum; i++) {
+            for(int j = spFrameBegin; j < spFrameEnd; j++) {
+                spSpectrum[i][j] = spSpectrum[i + 1][j];
+            }
+            //TODO:比較
+            //System.arraycopy(spSpectrum[i + 1], 0, spSpectrum[i], 0, spSpectrum[i].length);
+        }
+        //最新のデータを追加
+        for(int i = spFrameBegin; i < spFrameEnd; i++) {
+            spSpectrum[spNum - 1][i] = spectrum[i];
+        }
+        //TODO:比較
+        //System.arraycopy(spectrum, 0, spSpectrum[spNum - 1], 0, spectrum.length);
     }
 
     /**
      * 加算平均アベレージング
-     * @param spnum 加算平均アベレージング回数
-     * @param dbfs  デシベル値
-     * @param freq  受信周波数
-     * @param decibel   設定したデシベル値差
-     * @param filename  ファイル名
+     * @param spNum 加算平均アベレージング回数
+     * @param spectrum 過去 (SPNUM) 回分のデシベル値
+     * @return 平均デシベル値
      */
-    public void superposition(int spnum, double[] dbfs, int freq, double decibel, String filename) {
+    public double[] averaging(int spNum, double[][] spectrum) {
+        double[] average = new double[FFT_SIZE / 2];
+        int avgFrameBegin = frameSetting(16000) / 2;
+        int avgFrameEnd = FFT_SIZE / 2;
 
-        //重ね合わせ Superposition
-        int spFirstFrame = frameSetting(16000);
-        int spLastFrame = FFT_SIZE;
-
-        if(spcounter < spnum - 1) {     //最初の(SPNUM-1)回は代入
-
-            //spcounter回目の配列に現在のデシベル値を代入
-            for(int i = spFirstFrame / 2; i < spLastFrame / 2; i++) {
-                spdbfs[i][spcounter] = dbfs[i];
+        // (SPNUM) 個の配列からトータルを計算
+        for(int i = 0; i < spNum; i++) {
+            for(int j = avgFrameBegin; j < avgFrameEnd; j++) {
+                average[j] += spectrum[i][j];
             }
-            spcounter++;
-
-        } else {    //SPNUM回目以降はずっとこっち
-
-            //配列を1つずつずらす
-            for (int j = 1; j < spnum; j++) {
-                for (int k = spFirstFrame / 2; k < spLastFrame / 2; k++) {
-                    spdbfs[k][j - 1] = spdbfs[k][j];
-                }
-            }
-
-            //SPNUMコの配列からトータルを計算
-            for (int l = spFirstFrame / 2; l < spLastFrame; l++) {
-                for (int m = 0; m < spnum; m++) {
-                    avgdbfs[l] += spdbfs[l][m];
-                }
-            }
-            //SPNUMで割って平均を算出
-            for (int n = spFirstFrame / 2; n < spLastFrame; n++) {
-                avgdbfs[n] /= spnum;
-            }
-
-            int total = computeComparisonTargetDecibelAve(freq, avgdbfs);
-            detectApproaching(freq, total + decibel, avgdbfs, filename);
-
-            //計測終了
-            tm.finishMeasure();
-            sdlog.put("time3-" + filename, "processing time : " + tm.measureTimeSec().substring(0, 5));
-            //処理時間出力
-            tm.printTimeSec();
         }
+        // (SPNUM) で割って平均を算出
+        for(int i = avgFrameBegin; i < avgFrameEnd; i++) {
+            average[i] /= spNum;
+        }
+        return average;
     }
 
     /**
      * 比較対象の周波数帯の平均デシベル値を取得
-     * @param freq  受信周波数
-     * @param decibelFrequencySpectrum  デシベル値周波数成分
-     * @return  targetDecibelAve    比較対象の周波数帯の平均デシベル値
+     * @param freq 受信周波数
+     * @param spectrum デシベル値周波数成分
+     * @return 比較対象の周波数帯の平均デシベル値
      */
-    public int computeComparisonTargetDecibelAve(int freq, double[] decibelFrequencySpectrum) {
+    public double computeTargetDecibel(int freq, double[] spectrum) {
+        //比較対象の周波数帯の平均デシベル値を算出 Comparison Target
+        double targetDecibel = 0.0;
+        int frameIter = 0;
+        int targetFrameBegin = frameSetting(freq - 2000) / 2;
+        int targetFrameEnd = frameSetting(freq - 1500) / 2;
 
-        //比較対象の周波数を設定 comparison target
-        int targetDecibelAve = 0, freqFrameIter = 0;
-        int ctFirstFrame = frameSetting(freq - 2000);
-        int ctLastFrame = frameSetting(freq - 1500);
-
-        for (int j = ctFirstFrame / 2; j < ctLastFrame / 2; j++) {
-            targetDecibelAve += decibelFrequencySpectrum[j];
-            freqFrameIter++;
+        for(int i = targetFrameBegin; i < targetFrameEnd; i++) {
+            targetDecibel += spectrum[i];
+            frameIter++;
         }
         try {
-            targetDecibelAve /= freqFrameIter;
-        } catch (ArithmeticException e) {
+            targetDecibel /= frameIter;
+        } catch(ArithmeticException e) {
             e.printStackTrace();
         }
-        return targetDecibelAve;
+        return targetDecibel;
     }
 
     /**
      * 接近検知アルゴリズム
-     * @param freq          受信周波数
-     * @param decibel       検知デシベル値
-     * @param decibelFrequencySpectrum  デシベル値周波数成分
-     * @param filename      ファイル名
+     * @param freq 受信周波数
+     * @param avgSpectrum 平均デシベル値
+     * @param target 比較対象デシベル値
+     * @param diff デシベル差
+     * @param filename ファイル名
      */
-    public void detectApproaching(int freq, double decibel, double[] decibelFrequencySpectrum, String filename) {
-
+    public void detectApproaching(int freq, double[] avgSpectrum, double target, double diff, String filename) {
         //ドップラー効果考慮 Doppler Effect
-        //500Hzの幅で接近検知
-        int deFirstFrame = frameSetting(freq);
-        int deLastFrame = frameSetting(freq + 500);
+        int detectFrameBegin = frameSetting(freq) / 2;
+        int detectFrameEnd = frameSetting((freq + 500) / 2);
 
-        for(int j = deFirstFrame / 2; j < deLastFrame / 2; j++) {
-            if(decibelFrequencySpectrum[j] > decibel) {
-                //検知周波数
-                sdlog.put("freq3-" + filename, String.format(Locale.US, "%.3f", j * RESOLUTION) + " : " + String.valueOf(decibelFrequencySpectrum[j]));
+        for(int i = detectFrameBegin; i < detectFrameEnd; i++) {
+            if(avgSpectrum[i] > target + diff) {
+                sdlog.put("freq3-" + filename, String.format(Locale.US, "%.3f", i * RESOLUTION) + " : " + avgSpectrum[i]);
                 //インスタンス取得が外だから振動しない可能性あり
                 vib.cancel();
                 vib.vibrate(200);
@@ -346,13 +367,13 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         }
     }
 
+
     /**
      * 周波数からフレーム設定
-     * @param   freq    周波数
-     * @return  frame   フレーム
+     * @param freq 周波数
+     * @return フレーム
      */
     public int frameSetting(int freq) {
-
         int frame = (int)(2 * freq / RESOLUTION);
         if(frame % 2 == 1) {
             frame++;
