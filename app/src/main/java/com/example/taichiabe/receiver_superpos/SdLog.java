@@ -9,9 +9,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 
 import android.os.Environment;
+import android.text.style.TabStopSpan;
 import android.util.Log;
 
 public class SdLog {

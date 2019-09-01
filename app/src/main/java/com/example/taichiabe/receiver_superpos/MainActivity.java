@@ -61,9 +61,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
     @Override
     public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-
         if (isChecked) {
-
             EditText receivingFreqEdit = findViewById(R.id.receivingFreqEdit);
             EditText decibelDiffEdit = findViewById(R.id.decibelDiffEdit);
             EditText SpEdit = findViewById(R.id.SpEdit);
@@ -101,6 +99,8 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
             audioRec.startRecording();
             isRecording = true;
+            //計測開始
+            tm.startMeasure();
 
             //フーリエ解析スレッドを生成
             fft = new Thread(new Runnable() {
@@ -110,31 +110,16 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                     byte[] recordData = new byte[RECORD_BUFFER_SIZE];
                     while (isRecording) {
 
-                        //計測開始
-                        tm.startMeasure();
-
                         audioRec.read(recordData, 0, recordData.length);
 
                         //エンディアン変換
                         short[] shortData = toLittleEndian(recordData, RECORD_BUFFER_SIZE);
                         //FFTクラスの作成と値の引き出し
                         double[] fftData = fastFourierTransform(shortData);
-                        //パワースペクトル・デシベルの計算
+                        //パワースペクトル・デシベル値の計算
                         double[] spectrum = computePowerSpectrum(fftData);
-                        //重ね合わせ
-                        superposition(SP_NUMBER, spectrum);
-                        //アベレージング
-                        double[] average = averaging(SP_NUMBER, spSpectrum);
-                        //比較対象周波数帯の平均デシベル値を算出
-                        double targetDecibel = computeTargetDecibel(RECEIVING_FREQ, average);
                         //接近検知
-                        detectApproaching(RECEIVING_FREQ, average, targetDecibel, DECIBEL_DIFF, FILENAME);
-
-                        //計測終了
-                        tm.finishMeasure();
-                        sdlog.put("time3-" + FILENAME, "processing time : " + tm.measureTimeSec().substring(0, 5));
-                        //処理時間出力
-                        tm.printTimeSec();
+                        detectApproach(spectrum, SP_NUMBER, RECEIVING_FREQ, DECIBEL_DIFF, FILENAME);
                     }
                     audioRec.stop();
                     audioRec.release();
@@ -145,7 +130,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
             fft.start();
 
         } else {
-
             if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
                 vib.cancel();
                 audioRec.stop();
@@ -158,7 +142,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     @Override
     public void onPause() {
         super.onPause();
-
         if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
             audioRec.stop();
             isRecording = false;
@@ -168,7 +151,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     @Override
     public void onDestroy() {
         super.onDestroy();
-
         if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
             audioRec.stop();
             audioRec.release();
@@ -183,7 +165,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
      * @return エンディアン変換後short型データ
      */
     public short[] toLittleEndian(byte[] buf, int bufferSize) {
-
         //エンディアン変換
         //配列bufをもとにByteBufferオブジェクトbfを作成
         ByteBuffer bf = ByteBuffer.wrap(buf);
@@ -210,7 +191,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
      * @return フーリエ変換後データ
      */
     public double[] fastFourierTransform(short[] shortData) {
-
         //FFTクラスの作成と値の引き渡し
         FFT4g fft = new FFT4g(FFT_SIZE);
         double[] fftData = new double[FFT_SIZE];
@@ -228,7 +208,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
      * @return デシベル値
      */
     public double[] computePowerSpectrum(double[] fftData) {
-
         //絶対値データ absolute value
         double[] absoluteData = new double[FFT_SIZE / 2];
         //DeciBel Frequency Spectrum
@@ -241,68 +220,44 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     }
 
     /**
-     * 重ね合わせ
-     * @param spNum 重ね合わせ回数
-     * @param spectrum デシベル値 decibelFrequencySpectrum
-     */
-    public void superposition(int spNum, double[] spectrum) {
-
-        int spFrameBegin = frameSetting(16000) / 2;
-        int spFrameEnd = FFT_SIZE / 2;
-
-        if(spCounter < spNum - 1) { /* 最初の (SPNUM-1) 回は代入 */
-            for(int i = spFrameBegin; i < spFrameEnd; i++) {
-                spSpectrum[spCounter][i] = spectrum[i];
-            }
-            spCounter++;
-        } else {    /* (SPNUM) 回目以降 */
-            //配列を一つずつずらす
-            for(int i = 0; i < spNum; i++) {
-                for(int j = spFrameBegin; j < spFrameEnd; j++) {
-                    spSpectrum[i][j] = spSpectrum[i + 1][j];
-                }
-            }
-            //最新のデータを追加
-            for(int i = spFrameBegin; i < spFrameEnd; i++) {
-                spSpectrum[spNum - 1][i] = spectrum[i];
-            }
-        }
-    }
-
-    /**
-     * spCounterとか(SPNUM-1)回とか排除した重ね合わせ
-     * @param spNum 重ね合わせ回数
+     * 接近検知
      * @param spectrum デシベル値
+     * @param spNum 重ね合わせ回数
+     * @param freq 受信周波数
+     * @param diff 差
+     * @param fileName ファイル名
      */
-    public void superpositionalpha(int spNum, double[] spectrum) {
-        int spFrameBegin = frameSetting(16000) / 2;
-        int spFrameEnd = FFT_SIZE / 2;
+    public void detectApproach(double[] spectrum, int spNum, int freq, double diff, String fileName) {
 
-        //配列を一つずつずらす
-        for(int i = 0; i < spNum; i++) {
-            for(int j = spFrameBegin; j < spFrameEnd; j++) {
-                spSpectrum[i][j] = spSpectrum[i + 1][j];
+        if(spCounter < spNum) { /* 最初の SPNUM 回は代入 */
+            System.arraycopy(spectrum, 0, spSpectrum[spCounter], 0, spectrum.length);
+            spCounter++;
+        } else {    /* SPNUM+1 回目以降 */
+            for(int i = 0; i < spNum - 1; i++) {
+                System.arraycopy(spSpectrum[i + 1], 0, spSpectrum[i], 0, spSpectrum.length);
             }
-            //TODO:比較
-            //System.arraycopy(spSpectrum[i + 1], 0, spSpectrum[i], 0, spSpectrum[i].length);
+            System.arraycopy(spectrum, 0, spSpectrum[spNum - 1], 0, spectrum.length);
+
+            //計測終了
+            tm.finishMeasure();
+            //処理時間出力
+            tm.printTimeSec();
+
+            double[] average = calculateAverage(spSpectrum, spNum);
+            double targetDecibel = computeTargetDecibel(freq, average);
+            giveWarning(freq, average, targetDecibel, diff, fileName);
         }
-        //最新のデータを追加
-        for(int i = spFrameBegin; i < spFrameEnd; i++) {
-            spSpectrum[spNum - 1][i] = spectrum[i];
-        }
-        //TODO:比較
-        //System.arraycopy(spectrum, 0, spSpectrum[spNum - 1], 0, spectrum.length);
     }
 
     /**
-     * 加算平均アベレージング
-     * @param spNum 加算平均アベレージング回数
-     * @param spectrum 過去 (SPNUM) 回分のデシベル値
+     * 加算平均
+     * @param spectrum 過去 SPNUM 回分のデシベル値
+     * @param spNum 加算平均回数
      * @return 平均デシベル値
      */
-    public double[] averaging(int spNum, double[][] spectrum) {
+    public double[] calculateAverage(double[][] spectrum, int spNum) {
         double[] average = new double[FFT_SIZE / 2];
-        int avgFrameBegin = frameSetting(16000) / 2;
+        int avgFrameBegin = setFrame(16000) / 2;
         int avgFrameEnd = FFT_SIZE / 2;
 
         // (SPNUM) 個の配列からトータルを計算
@@ -328,8 +283,8 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         //比較対象の周波数帯の平均デシベル値を算出 Comparison Target
         double targetDecibel = 0.0;
         int frameIter = 0;
-        int targetFrameBegin = frameSetting(freq - 2000) / 2;
-        int targetFrameEnd = frameSetting(freq - 1500) / 2;
+        int targetFrameBegin = setFrame(freq - 2000) / 2;
+        int targetFrameEnd = setFrame(freq - 1500) / 2;
 
         for(int i = targetFrameBegin; i < targetFrameEnd; i++) {
             targetDecibel += spectrum[i];
@@ -344,17 +299,17 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     }
 
     /**
-     * 接近検知アルゴリズム
+     * 判定および警告
      * @param freq 受信周波数
      * @param avgSpectrum 平均デシベル値
      * @param target 比較対象デシベル値
      * @param diff デシベル差
      * @param filename ファイル名
      */
-    public void detectApproaching(int freq, double[] avgSpectrum, double target, double diff, String filename) {
+    public void giveWarning(int freq, double[] avgSpectrum, double target, double diff, String filename) {
         //ドップラー効果考慮 Doppler Effect
-        int detectFrameBegin = frameSetting(freq) / 2;
-        int detectFrameEnd = frameSetting((freq + 500) / 2);
+        int detectFrameBegin = setFrame(freq) / 2;
+        int detectFrameEnd = setFrame((freq + 500) / 2);
 
         for(int i = detectFrameBegin; i < detectFrameEnd; i++) {
             if(avgSpectrum[i] > target + diff) {
@@ -367,13 +322,12 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         }
     }
 
-
     /**
      * 周波数からフレーム設定
      * @param freq 周波数
      * @return フレーム
      */
-    public int frameSetting(int freq) {
+    public int setFrame(int freq) {
         int frame = (int)(2 * freq / RESOLUTION);
         if(frame % 2 == 1) {
             frame++;
