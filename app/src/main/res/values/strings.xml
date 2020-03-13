@@ -4,8 +4,8 @@
     <string name="receivingFreqEdit">18000 ~ 22000</string>
     <string name="decibelDiffText">周辺周波数との差</string>
     <string name="decibelDiffEdit">5 or 10 or 15</string>
-    <string name="SpText">重ね合わせ回数</string>
-    <string name="SpEdit">1~</string>
+    <string name="superpositionText">重ね合わせ回数</string>
+    <string name="superpositionEdit">1~</string>
     <string name="playing">PLAYING</string>
     <string name="stopped">STOPPED</string>
 </resources>

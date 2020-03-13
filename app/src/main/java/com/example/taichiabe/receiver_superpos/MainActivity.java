@@ -5,7 +5,6 @@ package com.example.taichiabe.receiver_superpos;
  *==========================================================*/
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.util.Locale;
 
 import android.app.Activity;
 import android.media.AudioFormat;
@@ -34,8 +33,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     boolean isRecording = false;
     Thread fft;
     private TimeMeasure tm;
-    SdLog sdlog;
-    //加算平均アベレージング回数
+    //アベレージング回数
     int spCounter;
     double[][] spSpectrum;
 
@@ -48,8 +46,8 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         receivingFreqText.setText(R.string.receivingFreqText);
         TextView decibelDiffText = findViewById(R.id.decibelDiffText);
         decibelDiffText.setText(R.string.decibelDiffText);
-        TextView SpText = findViewById(R.id.SpText);
-        SpText.setText(R.string.SpText);
+        TextView superpositionText = findViewById(R.id.superpositionText);
+        superpositionText.setText(R.string.superpositionText);
         Switch receivingSwitch = findViewById(R.id.receivingSwitch);
         receivingSwitch.setOnCheckedChangeListener(this);
     }
@@ -61,16 +59,14 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
     @Override
     public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-        if (isChecked) {
+        if(isChecked) {
             EditText receivingFreqEdit = findViewById(R.id.receivingFreqEdit);
             EditText decibelDiffEdit = findViewById(R.id.decibelDiffEdit);
-            EditText SpEdit = findViewById(R.id.SpEdit);
+            EditText superpositionEdit = findViewById(R.id.superpositionEdit);
 
             final int RECEIVING_FREQ = Integer.parseInt(receivingFreqEdit.getText().toString());
             final double DECIBEL_DIFF = Integer.parseInt(decibelDiffEdit.getText().toString());
-            final int SP_NUMBER = Integer.parseInt(SpEdit.getText().toString());
-
-            final String FILENAME = String.valueOf(System.currentTimeMillis());
+            final int SP_NUMBER = Integer.parseInt(superpositionEdit.getText().toString());
 
             spCounter = 0;
             spSpectrum = new double[SP_NUMBER][FFT_SIZE / 2];
@@ -108,7 +104,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                 public void run() {
 
                     byte[] recordData = new byte[RECORD_BUFFER_SIZE];
-                    while (isRecording) {
+                    while(isRecording) {
 
                         audioRec.read(recordData, 0, recordData.length);
 
@@ -117,9 +113,9 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
                         //FFTクラスの作成と値の引き出し
                         double[] fftData = fastFourierTransform(shortData);
                         //パワースペクトル・デシベル値の計算
-                        double[] spectrum = computePowerSpectrum(fftData);
+                        double[] decibelFrequencySpectrum = computePowerSpectrum(fftData);
                         //接近検知
-                        detectApproach(spectrum, SP_NUMBER, RECEIVING_FREQ, DECIBEL_DIFF, FILENAME);
+                        detectApproach(decibelFrequencySpectrum, SP_NUMBER, RECEIVING_FREQ, DECIBEL_DIFF);
                     }
                     audioRec.stop();
                     audioRec.release();
@@ -130,7 +126,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
             fft.start();
 
         } else {
-            if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+            if(audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
                 vib.cancel();
                 audioRec.stop();
                 //audioRec.release();
@@ -142,7 +138,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     @Override
     public void onPause() {
         super.onPause();
-        if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+        if(audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
             audioRec.stop();
             isRecording = false;
         }
@@ -151,7 +147,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+        if(audioRec.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
             audioRec.stop();
             audioRec.release();
             isRecording = false;
@@ -176,8 +172,7 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
 
         int bfBegin = bf.position();
         int bfEnd = bf.capacity() / 2;
-        //位置から容量まで
-        for (int i = bfBegin; i < bfEnd; i++) {
+        for(int i = bfBegin; i < bfEnd; i++) {
             //short値を読むための相対getメソッド
             //現在位置の2バイトを読み出す
             shortData[i] = bf.getShort();
@@ -211,32 +206,30 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         //絶対値データ absolute value
         double[] absoluteData = new double[FFT_SIZE / 2];
         //DeciBel Frequency Spectrum
-        double[] spectrum = new double[FFT_SIZE / 2];
+        double[] decibelFrequencySpectrum = new double[FFT_SIZE / 2];
         for(int i = 0; i < FFT_SIZE; i += 2) {
             absoluteData[i / 2] = Math.sqrt(Math.pow(fftData[i], 2) + Math.pow(fftData[i + 1], 2));
-            spectrum[i / 2] = (int) (20 * Math.log10(absoluteData[i / 2] / DB_BASELINE));
+            decibelFrequencySpectrum[i / 2] = (int) (20 * Math.log10(absoluteData[i / 2] / DB_BASELINE));
         }
-        return spectrum;
+        return decibelFrequencySpectrum;
     }
 
     /**
      * 接近検知
-     * @param spectrum デシベル値
+     * @param decibelFrequencySpectrum デシベル値
      * @param spNum 重ね合わせ回数
      * @param freq 受信周波数
      * @param diff 差
-     * @param fileName ファイル名
      */
-    public void detectApproach(double[] spectrum, int spNum, int freq, double diff, String fileName) {
-
+    public void detectApproach(double[] decibelFrequencySpectrum, int spNum, int freq, double diff) {
         if(spCounter < spNum) { /* 最初の SPNUM 回は代入 */
-            System.arraycopy(spectrum, 0, spSpectrum[spCounter], 0, spectrum.length);
+            System.arraycopy(decibelFrequencySpectrum, 0, spSpectrum[spCounter], 0, decibelFrequencySpectrum.length);
             spCounter++;
         } else {    /* SPNUM+1 回目以降 */
             for(int i = 0; i < spNum - 1; i++) {
                 System.arraycopy(spSpectrum[i + 1], 0, spSpectrum[i], 0, spSpectrum.length);
             }
-            System.arraycopy(spectrum, 0, spSpectrum[spNum - 1], 0, spectrum.length);
+            System.arraycopy(decibelFrequencySpectrum, 0, spSpectrum[spNum - 1], 0, decibelFrequencySpectrum.length);
 
             //計測終了
             tm.finishMeasure();
@@ -244,8 +237,8 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
             tm.printTimeSec();
 
             double[] average = calculateAverage(spSpectrum, spNum);
-            double targetDecibel = computeTargetDecibel(freq, average);
-            giveWarning(freq, average, targetDecibel, diff, fileName);
+            double targetDecibel = computeComparisonTargetDecibelAverage(freq, average);
+            giveWarning(freq, average, targetDecibel, diff);
         }
     }
 
@@ -257,8 +250,8 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
      */
     public double[] calculateAverage(double[][] spectrum, int spNum) {
         double[] average = new double[FFT_SIZE / 2];
-        int avgFrameBegin = setFrame(16000) / 2;
-        int avgFrameEnd = FFT_SIZE / 2;
+        int avgFrameBegin = setFrame(16000);
+        int avgFrameEnd = FFT_SIZE;
 
         // (SPNUM) 個の配列からトータルを計算
         for(int i = 0; i < spNum; i++) {
@@ -276,18 +269,18 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     /**
      * 比較対象の周波数帯の平均デシベル値を取得
      * @param freq 受信周波数
-     * @param spectrum デシベル値周波数成分
+     * @param spectrumAverage デシベル値周波数成分
      * @return 比較対象の周波数帯の平均デシベル値
      */
-    public double computeTargetDecibel(int freq, double[] spectrum) {
+    public double computeComparisonTargetDecibelAverage(int freq, double[] spectrumAverage) {
         //比較対象の周波数帯の平均デシベル値を算出 Comparison Target
         double targetDecibel = 0.0;
         int frameIter = 0;
-        int targetFrameBegin = setFrame(freq - 2000) / 2;
-        int targetFrameEnd = setFrame(freq - 1500) / 2;
+        int targetFrameBegin = setFrame(freq + 500);
+        int targetFrameEnd = setFrame(freq + 700);
 
         for(int i = targetFrameBegin; i < targetFrameEnd; i++) {
-            targetDecibel += spectrum[i];
+            targetDecibel += spectrumAverage[i];
             frameIter++;
         }
         try {
@@ -301,20 +294,17 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
     /**
      * 判定および警告
      * @param freq 受信周波数
-     * @param avgSpectrum 平均デシベル値
+     * @param spectrumAverage 平均デシベル値
      * @param target 比較対象デシベル値
      * @param diff デシベル差
-     * @param filename ファイル名
      */
-    public void giveWarning(int freq, double[] avgSpectrum, double target, double diff, String filename) {
+    public void giveWarning(int freq, double[] spectrumAverage, double target, double diff) {
         //ドップラー効果考慮 Doppler Effect
-        int detectFrameBegin = setFrame(freq) / 2;
-        int detectFrameEnd = setFrame((freq + 500) / 2);
+        int detectFrameBegin = setFrame(freq);
+        int detectFrameEnd = setFrame(freq + 500);
 
         for(int i = detectFrameBegin; i < detectFrameEnd; i++) {
-            if(avgSpectrum[i] > target + diff) {
-                sdlog.put("freq3-" + filename, String.format(Locale.US, "%.3f", i * RESOLUTION) + " : " + avgSpectrum[i]);
-                //インスタンス取得が外だから振動しない可能性あり
+            if(spectrumAverage[i] > target + diff) {
                 vib.cancel();
                 vib.vibrate(200);
                 break;
@@ -332,6 +322,6 @@ public class MainActivity extends Activity implements OnCheckedChangeListener {
         if(frame % 2 == 1) {
             frame++;
         }
-        return frame;
+        return frame / 2;
     }
 }

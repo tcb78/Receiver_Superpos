@@ -41,19 +41,19 @@
         android:textSize="18sp" />
 
     <TextView
-        android:id="@+id/SpText"
+        android:id="@+id/superpositionText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         app:layout_constraintTop_toBottomOf="@+id/decibelDiffEdit"
-        tools:text="@string/SpText"
+        tools:text="@string/superpositionText"
         android:textSize="18sp" />
 
     <EditText
-        android:id="@+id/SpEdit"
+        android:id="@+id/superpositionEdit"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        app:layout_constraintTop_toBottomOf="@+id/SpText"
-        android:hint="@string/SpEdit"
+        app:layout_constraintTop_toBottomOf="@+id/superpositionText"
+        android:hint="@string/superpositionEdit"
         android:inputType="numberSigned"
         android:textSize="18sp" />
 
@@ -61,7 +61,7 @@
         android:id="@+id/receivingSwitch"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        app:layout_constraintTop_toBottomOf="@+id/SpEdit"
+        app:layout_constraintTop_toBottomOf="@+id/superpositionEdit"
         app:layout_constraintLeft_toLeftOf="parent"
         app:layout_constraintRight_toRightOf="parent"
         android:textOn="@string/playing"
